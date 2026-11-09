@@ -2,7 +2,6 @@
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 
-// Define the User Schema
 const userSchema = new mongoose.Schema(
   {
     name: {
@@ -21,6 +20,7 @@ const userSchema = new mongoose.Schema(
       type: String,
       required: [true, 'Please add a password'],
     },
+    // Everyone registers as "user". Admin is set manually in MongoDB Atlas
     role: {
       type: String,
       enum: ['user', 'admin'],
@@ -33,98 +33,19 @@ const userSchema = new mongoose.Schema(
   }
 );
 
-// Mongoose pre-save hook to hash password before saving
-userSchema.pre('save', async function (next) {
-  if (!this.isModified('password')) {
-    return next();
-  }
+// Pre-save hook: hashes the password before it is saved.
+// isModified check avoids hashing an already hashed password again.
+userSchema.pre('save', async function () {
+  if (!this.isModified('password')) return;
   const salt = await bcrypt.genSalt(10);
   this.password = await bcrypt.hash(this.password, salt);
-  next();
 });
 
-// Method to verify entered password against hashed password
+// Compares the entered password with the hashed password in the database
 userSchema.methods.matchPassword = async function (enteredPassword) {
   return await bcrypt.compare(enteredPassword, this.password);
 };
 
-// Create standard Mongoose model
-const MongooseUser = mongoose.models.User || mongoose.model('User', userSchema);
-
-// In-memory fallback storage for preview when MongoDB Atlas is not yet connected
-const inMemoryUsers = [];
-
-// Seed default admin in memory for direct testing
-(async () => {
-  const salt = await bcrypt.genSalt(10);
-  const hashedPassword = await bcrypt.hash('admin123456', salt);
-  inMemoryUsers.push({
-    _id: '65f1a2b3c4d5e6f7a8b9c001',
-    name: 'Admin User',
-    email: 'admin@minishop.com',
-    password: hashedPassword,
-    role: 'admin',
-    createdAt: new Date(),
-    updatedAt: new Date(),
-    matchPassword: async function (pw) {
-      return await bcrypt.compare(pw, this.password);
-    },
-  });
-})();
-
-// Proxy adapter to seamlessly support both live MongoDB and in-memory preview
-const User = {
-  // Pass through Mongoose model properties
-  schema: userSchema,
-  
-  async findOne(query) {
-    if (mongoose.connection.readyState === 1) {
-      return await MongooseUser.findOne(query);
-    }
-    const user = inMemoryUsers.find((u) => {
-      if (query.email) return u.email.toLowerCase() === query.email.toLowerCase();
-      if (query._id) return String(u._id) === String(query._id);
-      return false;
-    });
-    return user || null;
-  },
-
-  async findById(id) {
-    if (mongoose.connection.readyState === 1) {
-      return await MongooseUser.findById(id).select('-password');
-    }
-    const user = inMemoryUsers.find((u) => String(u._id) === String(id));
-    if (!user) return null;
-    return {
-      _id: user._id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      createdAt: user.createdAt,
-    };
-  },
-
-  async create(userData) {
-    if (mongoose.connection.readyState === 1) {
-      return await MongooseUser.create(userData);
-    }
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(userData.password, salt);
-    const newUser = {
-      _id: 'usr_' + Date.now().toString(36) + Math.random().toString(36).substring(2, 6),
-      name: userData.name,
-      email: userData.email.toLowerCase(),
-      password: hashedPassword,
-      role: userData.role || 'user',
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      matchPassword: async function (pw) {
-        return await bcrypt.compare(pw, this.password);
-      },
-    };
-    inMemoryUsers.push(newUser);
-    return newUser;
-  },
-};
+const User = mongoose.models.User || mongoose.model('User', userSchema);
 
 export default User;

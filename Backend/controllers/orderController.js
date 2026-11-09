@@ -1,17 +1,16 @@
 // Backend/controllers/orderController.js
+import mongoose from 'mongoose';
 import Order from '../models/order.js';
 import Product from '../models/product.js';
 
-/**
- * @desc    Create new order with Cash on Delivery
- * @route   POST /api/orders
- * @access  Private/Customer
- */
+// @desc    Place a new order (Cash on Delivery)
+// @route   POST /api/orders
+// @access  Logged-in user
 export const addOrderItems = async (req, res) => {
   try {
     const { orderItems, shippingAddress } = req.body;
 
-    // Validate shipping address
+    // 1. Validate shipping details
     if (
       !shippingAddress ||
       !shippingAddress.fullName ||
@@ -20,30 +19,37 @@ export const addOrderItems = async (req, res) => {
       !shippingAddress.postalCode
     ) {
       return res.status(400).json({
-        message: 'Please provide full shipping details (Full Name, Address, City, and Postal Code)',
+        message: 'Please provide full shipping details (name, address, city, postal code)',
       });
     }
 
-    // Validate order items
-    if (!orderItems || !Array.isArray(orderItems) || orderItems.length === 0) {
-      return res.status(400).json({ message: 'No order items specified in checkout' });
+    // 2. Validate order items
+    if (!Array.isArray(orderItems) || orderItems.length === 0) {
+      return res.status(400).json({ message: 'No order items specified' });
     }
 
-    // Server-side validation of products, stock check, and total calculation
-    let calculatedTotalPrice = 0;
+    // 3. Check every product and stock using fresh data from MongoDB.
+    // We never trust price or total sent by the frontend.
+    let totalPrice = 0;
     const verifiedOrderItems = [];
+    const purchasedProducts = [];
 
     for (const item of orderItems) {
       const productId = item.product || item._id;
-      const product = await Product.findById(productId);
 
-      if (!product) {
-        return res.status(404).json({
-          message: `Product '${item.name || productId}' not found in catalog`,
-        });
+      if (!mongoose.isValidObjectId(productId)) {
+        return res.status(400).json({ message: 'Invalid product ID in order' });
       }
 
-      const quantity = Math.max(1, parseInt(item.quantity) || 1);
+      const quantity = parseInt(item.quantity);
+      if (!Number.isInteger(quantity) || quantity < 1) {
+        return res.status(400).json({ message: 'Quantity must be at least 1' });
+      }
+
+      const product = await Product.findById(productId);
+      if (!product) {
+        return res.status(404).json({ message: 'A product in your cart no longer exists' });
+      }
 
       if (product.stock < quantity) {
         return res.status(400).json({
@@ -51,28 +57,20 @@ export const addOrderItems = async (req, res) => {
         });
       }
 
-      // Decrement stock
-      product.stock -= quantity;
-      if (typeof product.save === 'function') {
-        await product.save();
-      }
+      totalPrice += product.price * quantity;
 
-      const itemSubtotal = product.price * quantity;
-      calculatedTotalPrice += itemSubtotal;
-
+      // Product details are copied into the order (snapshot)
       verifiedOrderItems.push({
         product: product._id,
         name: product.name,
         image: product.image,
         price: product.price,
-        quantity: quantity,
+        quantity,
       });
+      purchasedProducts.push({ product, quantity });
     }
 
-    // Round total to 2 decimal places to prevent floating point inaccuracies
-    calculatedTotalPrice = Math.round(calculatedTotalPrice * 100) / 100;
-
-    // Create the order in database with COD payment method
+    // 4. Save the order with the logged-in user's ID
     const order = await Order.create({
       user: req.user._id,
       orderItems: verifiedOrderItems,
@@ -83,28 +81,32 @@ export const addOrderItems = async (req, res) => {
         postalCode: shippingAddress.postalCode.trim(),
       },
       paymentMethod: 'Cash on Delivery',
-      totalPrice: calculatedTotalPrice,
-      orderStatus: 'pending',
+      totalPrice: Math.round(totalPrice * 100) / 100, // avoids floating point errors
     });
+
+    // 5. Reduce stock only after the order is saved
+    for (const { product, quantity } of purchasedProducts) {
+      product.stock -= quantity;
+      await product.save();
+    }
 
     res.status(201).json(order);
   } catch (error) {
     console.error('Error creating order:', error);
-    res.status(500).json({ message: error.message || 'Server error creating order' });
+    res.status(500).json({ message: 'Server error creating order' });
   }
 };
 
-/**
- * @desc    Get logged in user orders sorted newest first
- * @route   GET /api/orders/myOrders
- * @access  Private/Customer
- */
+// @desc    Get logged-in user's orders, newest first
+// @route   GET /api/orders/myOrders
+// @access  Logged-in user
 export const getMyOrders = async (req, res) => {
   try {
+    // Filter by req.user._id, so a user can never see another user's orders
     const orders = await Order.find({ user: req.user._id }).sort({ createdAt: -1 });
     res.json(orders);
   } catch (error) {
-    console.error('Error fetching user orders:', error);
-    res.status(500).json({ message: error.message || 'Server error fetching user orders' });
+    console.error('Error fetching orders:', error);
+    res.status(500).json({ message: 'Server error fetching orders' });
   }
 };

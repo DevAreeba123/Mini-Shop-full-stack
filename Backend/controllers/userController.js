@@ -2,11 +2,9 @@
 import User from '../models/user.js';
 import generateToken from '../utils/generateToken.js';
 
-/**
- * @desc    Register a new customer account
- * @route   POST /api/users/register
- * @access  Public
- */
+// @desc    Register a new customer account
+// @route   POST /api/users/register
+// @access  Public
 export const registerUser = async (req, res) => {
   try {
     const { name, email, password } = req.body;
@@ -28,36 +26,30 @@ export const registerUser = async (req, res) => {
       return res.status(400).json({ message: 'A user with this email address already exists' });
     }
 
-    // Create user strictly with role 'user' (preventing privilege escalation)
+    // Role is forced to 'user', so nobody can make themselves admin
     const user = await User.create({
       name: name.trim(),
       email: normalizedEmail,
-      password,
-      role: 'user', // Enforce customer role on registration
+      password, // hashed automatically by the pre-save hook in user.js
+      role: 'user',
     });
 
-    if (user) {
-      res.status(201).json({
-        _id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        token: generateToken(user._id),
-      });
-    } else {
-      res.status(400).json({ message: 'Invalid user registration data' });
-    }
+    res.status(201).json({
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      token: generateToken(user._id),
+    });
   } catch (error) {
     console.error('Registration error:', error);
-    res.status(500).json({ message: error.message || 'Server error during registration' });
+    res.status(500).json({ message: 'Server error during registration' });
   }
 };
 
-/**
- * @desc    Authenticate user & get JWT token
- * @route   POST /api/users/login
- * @access  Public
- */
+// @desc    Login user and return JWT token
+// @route   POST /api/users/login
+// @access  Public
 export const loginUser = async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -68,10 +60,9 @@ export const loginUser = async (req, res) => {
 
     const normalizedEmail = email.trim().toLowerCase();
 
-    // Find user in database
     const user = await User.findOne({ email: normalizedEmail });
 
-    // Validate user and verify hashed password
+    // Compare the entered password with the hashed password using bcrypt
     if (user && (await user.matchPassword(password))) {
       res.json({
         _id: user._id,
@@ -81,10 +72,11 @@ export const loginUser = async (req, res) => {
         token: generateToken(user._id),
       });
     } else {
+      // Same message for wrong email or wrong password, so attackers learn nothing
       res.status(401).json({ message: 'Invalid email or password' });
     }
   } catch (error) {
     console.error('Login error:', error);
-    res.status(500).json({ message: error.message || 'Server error during login' });
+    res.status(500).json({ message: 'Server error during login' });
   }
 };
