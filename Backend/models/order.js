@@ -105,12 +105,6 @@ const Order = {
     return query;
   },
 
-  async findById(id) {
-    if (mongoose.connection.readyState === 1) {
-      return await MongooseOrder.findById(id).populate('user', 'name email');
-    }
-    return inMemoryOrders.find((o) => String(o._id) === String(id)) || null;
-  },
 
   async create(orderData) {
     if (mongoose.connection.readyState === 1) {
